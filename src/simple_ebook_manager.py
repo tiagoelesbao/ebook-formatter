@@ -361,7 +361,7 @@ class SimpleEbookManager:
         console.print(f"[blue]ℹ Documento com aproximadamente {word_count} palavras[/blue]")
         
         # Para documentos muito grandes, dividimos em chunks
-        max_chunk_size = 12000  # aproximadamente palavras por chunk (ajustado para o modelo)
+        max_chunk_size = 4000  # REDUZIDO: aproximadamente palavras por chunk (ajustado para o modelo)
         
         if word_count > max_chunk_size:
             console.print(f"[yellow]⚠ Documento grande ({word_count} palavras), será processado em partes[/yellow]")
@@ -406,6 +406,13 @@ class SimpleEbookManager:
             ]
             pattern = re.compile('|'.join(f"({p})" for p in patterns))
         
+        # NOVO: Calcula número mínimo de chunks e tamanho aproximado
+        total_words = len(document_text.split())
+        total_chunks = max(12, total_words // (max_chunk_size // 2))  # Forçar pelo menos 12 chunks
+        approx_chunk_size = total_words // total_chunks
+        
+        console.print(f"[blue]ℹ Documento será dividido em pelo menos {total_chunks} partes (~{approx_chunk_size} palavras por parte)[/blue]")
+        
         chunks = []
         current_chunk = []
         current_size = 0
@@ -419,13 +426,13 @@ class SimpleEbookManager:
             is_heading = pattern.search(para) if headings_pattern else any(re.search(p, para) for p in patterns)
             
             # Se é um título e já temos conteúdo suficiente, começamos um novo chunk
-            if is_heading and current_size > max_chunk_size // 2 and current_chunk:
+            if is_heading and current_size > approx_chunk_size // 2 and current_chunk:
                 chunks.append('\n\n'.join(current_chunk))
                 current_chunk = [para]
                 current_size = para_size
                 last_was_heading = True
-            # Se estamos estourando o tamanho máximo e não estamos logo após um título
-            elif current_size + para_size > max_chunk_size and current_chunk and not last_was_heading:
+            # Se estamos estourando o tamanho aproximado e não estamos logo após um título
+            elif current_size + para_size > approx_chunk_size and current_chunk and not last_was_heading:
                 chunks.append('\n\n'.join(current_chunk))
                 current_chunk = [para]
                 current_size = para_size
@@ -459,6 +466,12 @@ class SimpleEbookManager:
                 
                 if formatted_chunk:
                     formatted_chunks.append(formatted_chunk)
+                    
+                    # NOVO: Salvar cada parte formatada individualmente para diagnóstico
+                    emergency_part_path = self.temp_dir / f"{document_info['title'].replace(' ', '_').lower()}_part_{i+1}.txt"
+                    with open(emergency_part_path, 'w', encoding='utf-8') as f:
+                        f.write(formatted_chunk)
+                    console.print(f"[blue]ℹ Parte {i+1} salva em:[/blue] {emergency_part_path}")
                 else:
                     console.print(f"[bold red]✘ Erro ao processar parte {i+1}[/bold red]")
                     self.log_message(f"Erro ao processar parte {i+1} do documento", "ERROR")
@@ -470,8 +483,19 @@ class SimpleEbookManager:
                 if i < len(chunks) - 1:
                     time.sleep(2)
         
+        # NOVO: Adicionar informações de diagnóstico 
+        console.print(f"[blue]ℹ Total de partes processadas: {len(formatted_chunks)}[/blue]")
+        total_words_processed = sum(len(chunk.split()) for chunk in formatted_chunks)
+        console.print(f"[blue]ℹ Total de palavras processadas: {total_words_processed}[/blue]")
+        
         # Combina as partes formatadas
         combined_content = '\n\n'.join(formatted_chunks)
+        
+        # NOVO: Salvar o conteúdo combinado antes da verificação de consistência
+        combined_backup_path = self.temp_dir / f"{document_info['title'].replace(' ', '_').lower()}_combined_raw.txt"
+        with open(combined_backup_path, 'w', encoding='utf-8') as f:
+            f.write(combined_content)
+        console.print(f"[green]✓ Backup do conteúdo combinado salvo em:[/green] {combined_backup_path}")
         
         # Se necessário, podemos fazer um passe final para garantir consistência
         if len(chunks) > 1:
@@ -531,6 +555,12 @@ class SimpleEbookManager:
         """Garante a consistência da formatação em documentos processados em partes"""
         console.print("[cyan]ℹ Verificando consistência da formatação...[/cyan]")
         
+        # NOVO: Salvar o conteúdo antes da verificação final
+        pre_consistency_path = self.temp_dir / f"{document_info['title'].replace(' ', '_').lower()}_pre_consistency.txt"
+        with open(pre_consistency_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        console.print(f"[blue]ℹ Conteúdo pré-verificação salvo em:[/blue] {pre_consistency_path}")
+        
         system_prompt = """
 Você é um especialista em formatação e padronização de documentos. Sua tarefa é garantir que a formatação
 do documento a seguir seja consistente, verificando cabeçalhos, estilos e estrutura.
@@ -580,6 +610,13 @@ Retorne apenas o documento corrigido, sem explicações adicionais.
             
             if corrected_content:
                 console.print("[green]✓ Formatação unificada com sucesso[/green]")
+                
+                # NOVO: Salvar o conteúdo após verificação para comparação
+                post_consistency_path = self.temp_dir / f"{document_info['title'].replace(' ', '_').lower()}_post_consistency.txt"
+                with open(post_consistency_path, 'w', encoding='utf-8') as f:
+                    f.write(corrected_content)
+                console.print(f"[blue]ℹ Conteúdo pós-verificação salvo em:[/blue] {post_consistency_path}")
+                
                 return corrected_content
             else:
                 console.print("[yellow]⚠ Resposta vazia na verificação de consistência, mantendo versão atual[/yellow]")
@@ -820,16 +857,40 @@ absolutamente todo o conteúdo original intacto.
             with open(css_file, 'w', encoding='utf-8') as f:
                 f.write(self._get_default_pdf_css())
         
+        # Tenta encontrar o wkhtmltopdf no sistema
+        wkhtmltopdf_path = None
+        possible_paths = [
+            'C:\\Program Files\\wkhtmltopdf\\bin\\wkhtmltopdf.exe',
+            'C:\\Program Files (x86)\\wkhtmltopdf\\bin\\wkhtmltopdf.exe',
+            '/usr/bin/wkhtmltopdf',
+            '/usr/local/bin/wkhtmltopdf'
+        ]
+        
+        for path in possible_paths:
+            if os.path.exists(path):
+                wkhtmltopdf_path = path
+                console.print(f"[green]✓ wkhtmltopdf encontrado em: {wkhtmltopdf_path}[/green]")
+                break
+        
         # Opções para o Pandoc
         options = [
             '--toc',
             '--toc-depth=3',
-            '--pdf-engine=wkhtmltopdf',  # Alternativa: xelatex ou weasyprint
+        ]
+        
+        # Adiciona o caminho do wkhtmltopdf se encontrado
+        if wkhtmltopdf_path:
+            options.append(f'--pdf-engine={wkhtmltopdf_path}')
+        else:
+            options.append('--pdf-engine=wkhtmltopdf')  # tenta usar do PATH
+        
+        # Adiciona as outras opções
+        options.extend([
             f'--css={css_file}',
             f'--metadata=title:{document_info["title"]}',
             f'--metadata=author:{document_info["author"] or "Autor"}',
             f'--metadata=lang:{document_info["language"]}'
-        ]
+        ])
         
         # Executa Pandoc para conversão
         console.print("[cyan]ℹ Executando Pandoc para converter para PDF...[/cyan]")
@@ -858,7 +919,13 @@ absolutamente todo o conteúdo original intacto.
             try:
                 console.print("[cyan]ℹ Tentando alternativa com weasyprint...[/cyan]")
                 alt_options = options.copy()
-                alt_options[2] = '--pdf-engine=weasyprint'
+                # Substitui o engine de PDF
+                for i, opt in enumerate(alt_options):
+                    if opt.startswith('--pdf-engine='):
+                        alt_options[i] = '--pdf-engine=weasyprint'
+                        break
+                else:
+                    alt_options.append('--pdf-engine=weasyprint')
                 
                 pypandoc.convert_file(
                     str(markdown_filepath),
