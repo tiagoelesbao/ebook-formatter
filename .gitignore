@@ -1,0 +1,15 @@
+﻿# Diretórios gerados
+/output/
+/temp/
+/logs/
+venv/
+__pycache__/
+*.py[cod]
+*.so
+
+# Arquivos grandes
+pandoc.exe
+wkhtmltopdf.exe
+*.docx
+*.pdf
+*.epub

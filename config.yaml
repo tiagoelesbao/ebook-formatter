@@ -1,0 +1,46 @@
+ebook:
+  title: "Meu Ebook"
+  subtitle: ""
+  author: ""
+  language: "pt-BR"
+  cover_image: "assets/images/cover.jpg"
+  
+formatting:
+  word_count_tolerance: 5  # Porcentagem máxima de variação permitida no word count
+  headings_pattern: ""     # Padrão para detectar títulos (regex)
+  
+visual:
+  body_font: "Merriweather"
+  heading_font: "Montserrat"
+  code_font: "Source Code Pro"
+  base_font_size: 12
+  line_height: 1.5
+  colors:
+    primary: "#3A86FF"
+    secondary: "#FF006E"
+    background: "#FFFFFF"
+    text: "#333333"
+    code_background: "#F5F5F5"
+  
+ai:
+  model: "claude-3-opus-20240229"
+  max_tokens: 100000
+  temperature: 0.1  # Baixa temperatura para respostas mais previsíveis
+  
+export:
+  include_toc: true
+  include_cover: true
+  include_frontmatter: true
+  formats:
+    epub:
+      enabled: true
+      css: "src/styles/epub.css"
+    pdf:
+      enabled: true
+      css: "src/styles/pdf.css"
+      engine: "wkhtmltopdf"  # Alternativas: xelatex, weasyprint
+    html:
+      enabled: true
+      css: "src/styles/html.css"
+      template: "src/templates/html.template"
+      self_contained: true
