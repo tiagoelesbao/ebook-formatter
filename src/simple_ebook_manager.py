@@ -8,7 +8,6 @@ from datetime import datetime
 from rich.console import Console
 from rich.progress import Progress
 from rich.panel import Panel
-import frontmatter
 import shutil
 import sys
 
@@ -35,6 +34,14 @@ except ImportError:
 try:
     from docx import Document
     DOCX_AVAILABLE = True
+except ImportError:
+    pass
+
+# Importando frontmatter apenas para verificar se está disponível
+FRONTMATTER_AVAILABLE = False
+try:
+    import frontmatter
+    FRONTMATTER_AVAILABLE = True
 except ImportError:
     pass
 
@@ -487,15 +494,20 @@ class SimpleEbookManager:
             try:
                 console.print(f"[cyan]ℹ Enviando {len(content.split())} palavras para formatação com IA...[/cyan]")
                 
-                response = self.client.messages.create(
+                with self.client.messages.stream(
                     model=self.config['ai'].get('model', 'claude-3-opus-20240229'),
                     temperature=self.config['ai'].get('temperature', 0.1),
-                    max_tokens=self.config['ai'].get('max_tokens', 4000),
+                    max_tokens=4000,
                     system=system_prompt,
                     messages=[{"role": "user", "content": user_prompt}]
-                )
-                
-                formatted_content = response.content[0].text
+                ) as stream:
+                    formatted_content = ""
+                    for text in stream.text_stream:
+                        formatted_content += text
+                        # Indicador de progresso usando print regular em vez de console.print
+                        print(".", end="", flush=True)
+                    print()  # Nova linha após terminar
+
                 if formatted_content:
                     console.print("[green]✓ Conteúdo formatado com sucesso pela IA[/green]")
                     return formatted_content
@@ -551,15 +563,21 @@ Retorne apenas o documento corrigido, sem explicações adicionais.
         try:
             console.print("[cyan]ℹ Enviando para verificação final de consistência...[/cyan]")
             
-            response = self.client.messages.create(
+            # Versão com streaming para evitar timeout
+            with self.client.messages.stream(
                 model=self.config['ai'].get('model', 'claude-3-opus-20240229'),
                 temperature=0.1,  # Baixa temperatura para resultados consistentes
-                max_tokens=self.config['ai'].get('max_tokens', 4000),
+                max_tokens=4000,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_prompt}]
-            )
+            ) as stream:
+                corrected_content = ""
+                for text in stream.text_stream:
+                    corrected_content += text
+                    # Opcional: Imprimir pontos para indicar progresso
+                    print(".", end="", flush=True)
+                print()  # Nova linha após terminar
             
-            corrected_content = response.content[0].text
             if corrected_content:
                 console.print("[green]✓ Formatação unificada com sucesso[/green]")
                 return corrected_content
@@ -663,26 +681,31 @@ absolutamente todo o conteúdo original intacto.
         markdown_filepath = self.temp_dir / markdown_filename
         
         try:
-            # Adiciona metadados YAML no início
-            yaml_metadata = {
-                'title': document_info['title'],
-                'author': document_info['author'],
-                'language': document_info['language'],
-                'date': document_info['date']
-            }
-            
-            post = frontmatter.Post(formatted_text, **yaml_metadata)
-            
-            # Salva o arquivo
+            # Versão segura que não depende de frontmatter.Post
+            # Constrói manualmente o frontmatter YAML
+            yaml_header = "---\n"
+            yaml_header += f"title: \"{document_info['title']}\"\n"
+            yaml_header += f"author: \"{document_info['author']}\"\n"
+            yaml_header += f"language: \"{document_info['language']}\"\n"
+            yaml_header += f"date: \"{document_info['date']}\"\n"
+            yaml_header += "---\n\n"
+                
+            # Salva o arquivo com frontmatter manual
             with open(markdown_filepath, 'w', encoding='utf-8') as f:
-                f.write(frontmatter.dumps(post))
+                f.write(yaml_header + formatted_text)
                 
             console.print(f"[green]✓ Documento formatado salvo:[/green] {markdown_filepath}")
+            
+            # Salva backup do conteúdo formatado (para não perder o trabalho)
+            backup_path = self.temp_dir / f"{sanitized_title}_formatted_backup.txt"
+            with open(backup_path, 'w', encoding='utf-8') as f:
+                f.write(formatted_text)
+            console.print(f"[blue]ℹ Backup do conteúdo salvo em:[/blue] {backup_path}")
             
             # Salva uma cópia na pasta de conteúdo formatado
             formatted_dir_path = self.content_dir / "formatted" / markdown_filename
             with open(formatted_dir_path, 'w', encoding='utf-8') as f:
-                f.write(frontmatter.dumps(post))
+                f.write(yaml_header + formatted_text)
             console.print(f"[blue]ℹ Cópia salva em:[/blue] {formatted_dir_path}")
             
             return markdown_filepath
@@ -690,6 +713,16 @@ absolutamente todo o conteúdo original intacto.
         except Exception as e:
             console.print(f"[bold red]✘ Erro ao salvar documento formatado:[/bold red] {str(e)}")
             self.log_message(f"Erro ao salvar documento formatado: {str(e)}", "ERROR")
+            
+            # Tenta salvar pelo menos o conteúdo formatado
+            try:
+                emergency_path = self.temp_dir / f"{sanitized_title}_formatted_emergency.txt"
+                with open(emergency_path, 'w', encoding='utf-8') as f:
+                    f.write(formatted_text)
+                console.print(f"[yellow]⚠ Salvo conteúdo de emergência em:[/yellow] {emergency_path}")
+            except:
+                pass
+                
             return None
     
     def _generate_ebook(self, markdown_filepath, output_filepath, output_format, document_info):
